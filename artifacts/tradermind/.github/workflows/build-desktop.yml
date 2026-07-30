@@ -1,0 +1,82 @@
+name: Build TraderMind Desktop (.exe)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Windows EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Get pnpm store path
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: windows-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: windows-pnpm-
+
+      # نصب از root workspace تا همه dependency‌های monorepo حل شوند
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      # electron:build = vite build با electron config + electron-builder
+      # electron config نیازی به PORT/BASE_PATH ندارد (base: './')
+      - name: Build Electron app
+        working-directory: artifacts/tradermind
+        run: pnpm run electron:build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: TraderMind-Windows
+          path: |
+            artifacts/tradermind/dist-electron/*.exe
+            artifacts/tradermind/dist-electron/*.msi
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Create Release
+    needs: build-windows
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: TraderMind-Windows
+          path: ./release-files
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./release-files/*.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
